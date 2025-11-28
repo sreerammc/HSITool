@@ -13,13 +13,19 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class JsonQueryUtility {
     private static final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new JavaTimeModule());
     private static PrintWriter fileWriter = null;
+    
+    // Thread pool for parallel processing
+    private static final int THREAD_POOL_SIZE = Runtime.getRuntime().availableProcessors();
+    private static final ExecutorService executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
 
     // Wrapper class to track filename with each object
     private static class ObjectWithFile {
@@ -53,12 +59,18 @@ public class JsonQueryUtility {
         String outputFile = args.length > 4 ? args[4] : null;
         String mode = args.length > 5 ? args[5].toLowerCase() : "individual"; // "individual" or "summary"
         boolean includeFiles = true; // Default to including files
+        boolean parallelProcessing = true; // Default to parallel processing
+        boolean verbose = false; // Default to non-verbose
         
-        // Check for --no-files flag in any position after mode
+        // Check for flags in any position after mode
         for (int i = 6; i < args.length; i++) {
-            if ("--no-files".equalsIgnoreCase(args[i]) || "-nf".equalsIgnoreCase(args[i])) {
+            String arg = args[i].toLowerCase();
+            if ("--no-files".equals(arg) || "-nf".equals(arg)) {
                 includeFiles = false;
-                break;
+            } else if ("--no-parallel".equals(arg) || "-np".equals(arg) || "--sequential".equals(arg)) {
+                parallelProcessing = false;
+            } else if ("--verbose".equals(arg) || "-v".equals(arg)) {
+                verbose = true;
             }
         }
 
@@ -102,22 +114,38 @@ public class JsonQueryUtility {
 
             // Initialize file writer
             fileWriter = new PrintWriter(new FileWriter(outputFile, false));
-            System.out.println("Output will be written to: " + outputFile + "\n");
+            System.out.println("Output will be written to: " + outputFile);
+            System.out.println("Parallel processing: " + (parallelProcessing ? "ENABLED (" + THREAD_POOL_SIZE + " threads)" : "DISABLED (sequential)"));
+            System.out.println("Verbose mode: " + (verbose ? "ENABLED" : "DISABLED"));
+            System.out.println("");
 
             if (mode.equals("summary")) {
                 // Summary mode: generate CSV output for all points
-                generateSummaryReport(dataDirectory, pointIds, timeFrom, timeTo, includeFiles);
+                generateSummaryReport(dataDirectory, pointIds, timeFrom, timeTo, includeFiles, parallelProcessing, verbose);
             } else {
                 // Individual mode: detailed analysis for each point
                 // Process incrementally to manage memory
                 int processedCount = 0;
+                long startTime = System.currentTimeMillis();
+                
+                if (verbose) {
+                    System.out.println("Starting to process " + pointIds.size() + " point IDs in individual mode...");
+                    System.out.println("");
+                }
+                
                 for (Long pointId : pointIds) {
+                    long pointStartTime = System.currentTimeMillis();
+                    
                     printLine("========================================");
                     printLine("Processing Point ID: " + pointId);
                     printLine("========================================");
                     printLine("");
 
-                    List<ObjectWithFile> matchingObjects = queryJsonFiles(dataDirectory, pointId, timeFrom, timeTo);
+                    if (verbose) {
+                        System.out.println("Processing point ID: " + pointId + " (" + (processedCount + 1) + "/" + pointIds.size() + ")");
+                    }
+                    
+                    List<ObjectWithFile> matchingObjects = queryJsonFiles(dataDirectory, pointId, timeFrom, timeTo, parallelProcessing, verbose);
                     analyzeResults(matchingObjects, pointId, timeFrom, timeTo);
                     printLine("");
                     
@@ -125,15 +153,32 @@ public class JsonQueryUtility {
                     matchingObjects.clear();
                     processedCount++;
                     
-                    // Progress indicator for large datasets
-                    if (processedCount % 1000 == 0) {
-                        System.out.println("Processed " + processedCount + " of " + pointIds.size() + " points...");
+                    long pointElapsed = System.currentTimeMillis() - pointStartTime;
+                    if (verbose) {
+                        System.out.println("  ✓ Point " + pointId + " completed in " + pointElapsed + "ms");
+                    }
+                    
+                    // Progress indicator for large datasets - more frequent in verbose mode
+                    int progressInterval = verbose ? 100 : 1000;
+                    if (processedCount % progressInterval == 0 || processedCount == pointIds.size()) {
+                        long elapsed = System.currentTimeMillis() - startTime;
+                        double percent = (processedCount * 100.0) / pointIds.size();
+                        double avgTimePerPoint = elapsed / (double) processedCount;
+                        long estimatedRemaining = (long) (avgTimePerPoint * (pointIds.size() - processedCount));
+                        
+                        System.out.println(String.format("Progress: %d/%d (%.1f%%) | Elapsed: %ds | Avg: %.1fms/point | ETA: %ds", 
+                            processedCount, pointIds.size(), percent, elapsed / 1000, avgTimePerPoint, estimatedRemaining / 1000));
                     }
                     
                     // Suggest GC after processing batches
                     if (processedCount % 5000 == 0) {
                         System.gc();
                     }
+                }
+                
+                if (verbose) {
+                    long totalTime = System.currentTimeMillis() - startTime;
+                    System.out.println("\nAll points processed in " + (totalTime / 1000.0) + " seconds");
                 }
             }
 
@@ -154,6 +199,7 @@ public class JsonQueryUtility {
             if (fileWriter != null) {
                 fileWriter.close();
             }
+            executorService.shutdown();
         }
     }
 
@@ -168,6 +214,8 @@ public class JsonQueryUtility {
         System.out.println("  outputFile     - (Optional) Output file path. Auto-generated if not specified.");
         System.out.println("  mode           - (Optional) Output mode: 'individual' (default) or 'summary'");
         System.out.println("  --no-files     - (Optional) Exclude file names from summary output. Use -nf as shorthand.");
+        System.out.println("  --no-parallel  - (Optional) Disable parallel processing (use sequential). Use -np as shorthand.");
+        System.out.println("  --verbose      - (Optional) Enable verbose progress output. Use -v as shorthand.");
         System.out.println("");
         System.out.println("Examples:");
         System.out.println("  Single ID, individual mode:");
@@ -181,6 +229,12 @@ public class JsonQueryUtility {
         System.out.println("");
         System.out.println("  CSV file, summary mode (CSV summary without files):");
         System.out.println("    JsonQueryUtility \"C:\\data\" points.csv \"2025-11-19T14:00:00.000Z\" \"2025-11-19T15:30:00.000Z\" summary.csv summary --no-files");
+        System.out.println("");
+        System.out.println("  Disable parallel processing (sequential mode):");
+        System.out.println("    JsonQueryUtility \"C:\\data\" points.csv \"2025-11-19T14:00:00.000Z\" \"2025-11-19T15:30:00.000Z\" summary.csv summary --no-parallel");
+        System.out.println("");
+        System.out.println("  Enable verbose progress output:");
+        System.out.println("    JsonQueryUtility \"C:\\data\" points.csv \"2025-11-19T14:00:00.000Z\" \"2025-11-19T15:30:00.000Z\" summary.csv summary --verbose");
         System.out.println("");
         System.out.println("CSV Format:");
         System.out.println("  CSV file should contain point IDs, one per line. First line can be a header (will be skipped).");
@@ -264,7 +318,7 @@ public class JsonQueryUtility {
      * Output format: TimeRange, Point ID, Total Count, Unique Count, [Files] (optional)
      */
     private static void generateSummaryReport(String dataDirectory, List<Long> pointIds, 
-                                             Instant timeFrom, Instant timeTo, boolean includeFiles) throws IOException {
+                                             Instant timeFrom, Instant timeTo, boolean includeFiles, boolean parallelProcessing, boolean verbose) throws IOException {
         // Print header information
         printLine("Querying JSON files...");
         printLine("Directory: " + dataDirectory);
@@ -284,32 +338,87 @@ public class JsonQueryUtility {
             printLine("TimeRange,Point ID,Total Count,Unique Count");
         }
 
-        // Process each point ID with memory-efficient streaming
-        int processedCount = 0;
+        // Process point IDs in parallel for better performance
+        AtomicInteger processedCount = new AtomicInteger(0);
+        List<Future<PointResult>> futures = new ArrayList<>();
+        long startTime = System.currentTimeMillis();
+        
         for (Long pointId : pointIds) {
-            // Use memory-efficient query that only collects counts and optionally file names
-            PointSummary summary = queryJsonFilesSummary(dataDirectory, pointId, timeFrom, timeTo, includeFiles);
-            
-            // Output CSV row immediately and flush
+            Future<PointResult> future = executorService.submit(() -> {
+                long pointStartTime = System.currentTimeMillis();
+                if (verbose) {
+                    System.out.println("Processing point ID: " + pointId);
+                }
+                
+                PointSummary summary = queryJsonFilesSummary(dataDirectory, pointId, timeFrom, timeTo, includeFiles, parallelProcessing, verbose);
+                
+                int count = processedCount.incrementAndGet();
+                long pointElapsed = System.currentTimeMillis() - pointStartTime;
+                
+                if (verbose) {
+                    System.out.println("  ✓ Point " + pointId + " completed: " + summary.getTotalCount() + " objects found in " + pointElapsed + "ms");
+                }
+                
+                // Progress indicator - more frequent in verbose mode
+                int progressInterval = verbose ? 100 : 1000;
+                if (count % progressInterval == 0 || count == pointIds.size()) {
+                    long elapsed = System.currentTimeMillis() - startTime;
+                    double percent = (count * 100.0) / pointIds.size();
+                    double avgTimePerPoint = elapsed / (double) count;
+                    long estimatedRemaining = (long) (avgTimePerPoint * (pointIds.size() - count));
+                    
+                    System.out.println(String.format("Progress: %d/%d (%.1f%%) | Elapsed: %ds | Avg: %.1fms/point | ETA: %ds", 
+                        count, pointIds.size(), percent, elapsed / 1000, avgTimePerPoint, estimatedRemaining / 1000));
+                }
+                
+                return new PointResult(pointId, summary);
+            });
+            futures.add(future);
+        }
+        
+        // Collect results and output in order
+        List<PointResult> results = new ArrayList<>();
+        if (verbose) {
+            System.out.println("\nCollecting results...");
+        }
+        
+        for (int i = 0; i < futures.size(); i++) {
+            try {
+                results.add(futures.get(i).get());
+                if (verbose && (i + 1) % 100 == 0) {
+                    System.out.println("Collected " + (i + 1) + " of " + futures.size() + " results...");
+                }
+            } catch (InterruptedException | ExecutionException e) {
+                System.err.println("Error processing point: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+        
+        long totalTime = System.currentTimeMillis() - startTime;
+        if (verbose) {
+            System.out.println("\nAll points processed in " + (totalTime / 1000.0) + " seconds");
+            System.out.println("Writing results to output file...\n");
+        }
+        
+        // Sort by point ID to maintain consistent output order
+        results.sort(Comparator.comparing(PointResult::getPointId));
+        
+        // Output results
+        for (PointResult result : results) {
+            PointSummary summary = result.getSummary();
             if (includeFiles) {
                 String filesArray = formatFilesArray(summary.getFiles());
-                printLine(String.format("%s,%d,%d,%d,\"%s\"", timeRange, pointId, 
+                printLine(String.format("%s,%d,%d,%d,\"%s\"", timeRange, result.getPointId(), 
                         summary.getTotalCount(), summary.getUniqueCount(), filesArray));
             } else {
-                printLine(String.format("%s,%d,%d,%d", timeRange, pointId, 
+                printLine(String.format("%s,%d,%d,%d", timeRange, result.getPointId(), 
                         summary.getTotalCount(), summary.getUniqueCount()));
             }
-            
-            // Progress indicator for large datasets
-            processedCount++;
-            if (processedCount % 1000 == 0) {
-                System.out.println("Processed " + processedCount + " of " + pointIds.size() + " points...");
-            }
-            
-            // Suggest GC after processing batches (helps with memory management)
-            if (processedCount % 5000 == 0) {
-                System.gc();
-            }
+        }
+        
+        // Suggest GC after processing
+        if (pointIds.size() > 1000) {
+            System.gc();
         }
     }
     
@@ -331,6 +440,22 @@ public class JsonQueryUtility {
         public int getUniqueCount() { return uniqueCount; }
         public List<String> getFiles() { return files; }
     }
+    
+    /**
+     * Wrapper class for point ID and its summary result.
+     */
+    private static class PointResult {
+        private final Long pointId;
+        private final PointSummary summary;
+        
+        public PointResult(Long pointId, PointSummary summary) {
+            this.pointId = pointId;
+            this.summary = summary;
+        }
+        
+        public Long getPointId() { return pointId; }
+        public PointSummary getSummary() { return summary; }
+    }
 
     /**
      * Formats a list of file names as an array string.
@@ -348,7 +473,7 @@ public class JsonQueryUtility {
      * Used for summary mode to handle large datasets (e.g., 40,000 points).
      */
     private static PointSummary queryJsonFilesSummary(String dataDirectory, Long targetId, 
-                                                      Instant timeFrom, Instant timeTo, boolean includeFiles) throws IOException {
+                                                      Instant timeFrom, Instant timeTo, boolean includeFiles, boolean parallelProcessing, boolean verbose) throws IOException {
         File dir = new File(dataDirectory);
         if (!dir.exists() || !dir.isDirectory()) {
             throw new IOException("Directory does not exist: " + dataDirectory);
@@ -359,12 +484,19 @@ public class JsonQueryUtility {
             throw new IOException("No JSON files found in directory: " + dataDirectory);
         }
 
-        // Use sets to track unique objects and optionally files without storing all data
-        Set<DataObject> uniqueObjects = new HashSet<>();
-        Set<String> uniqueFiles = includeFiles ? new HashSet<>() : null;
-        AtomicInteger totalCount = new AtomicInteger(0);
+        if (verbose) {
+            System.out.println("  Scanning " + files.length + " JSON files...");
+        }
 
-        for (File file : files) {
+        // Use thread-safe collections for parallel processing
+        Set<DataObject> uniqueObjects = ConcurrentHashMap.newKeySet();
+        Set<String> uniqueFiles = includeFiles ? ConcurrentHashMap.newKeySet() : null;
+        AtomicInteger totalCount = new AtomicInteger(0);
+        AtomicInteger filesProcessed = new AtomicInteger(0);
+
+        // Process files in parallel or sequentially based on flag
+        Stream<File> fileStream = parallelProcessing ? Arrays.stream(files).parallel() : Arrays.stream(files);
+        fileStream.forEach(file -> {
             try {
                 ComplexData complexData = objectMapper.readValue(file, ComplexData.class);
                 
@@ -385,10 +517,19 @@ public class JsonQueryUtility {
                                 }
                             });
                 }
+                
+                int processed = filesProcessed.incrementAndGet();
+                if (verbose && processed % 10 == 0) {
+                    System.out.println("    Processed " + processed + "/" + files.length + " files...");
+                }
             } catch (IOException e) {
                 String errorMsg = "Error reading file " + file.getName() + ": " + e.getMessage();
                 printError(errorMsg);
             }
+        });
+        
+        if (verbose) {
+            System.out.println("  ✓ Completed scanning " + files.length + " files");
         }
 
         // Sort file names for consistent output (only if files are included)
@@ -406,7 +547,7 @@ public class JsonQueryUtility {
      * Used for individual mode where detailed analysis is needed.
      */
     private static List<ObjectWithFile> queryJsonFiles(String dataDirectory, Long targetId, 
-                                                       Instant timeFrom, Instant timeTo) throws IOException {
+                                                       Instant timeFrom, Instant timeTo, boolean parallelProcessing, boolean verbose) throws IOException {
         File dir = new File(dataDirectory);
         if (!dir.exists() || !dir.isDirectory()) {
             throw new IOException("Directory does not exist: " + dataDirectory);
@@ -417,9 +558,17 @@ public class JsonQueryUtility {
             throw new IOException("No JSON files found in directory: " + dataDirectory);
         }
 
-        List<ObjectWithFile> matchingObjects = new ArrayList<>();
+        if (verbose) {
+            System.out.println("Scanning " + files.length + " JSON files for point ID " + targetId + "...");
+        }
 
-        for (File file : files) {
+        // Use thread-safe list for parallel processing
+        List<ObjectWithFile> matchingObjects = Collections.synchronizedList(new ArrayList<>());
+        AtomicInteger filesProcessed = new AtomicInteger(0);
+
+        // Process files in parallel or sequentially based on flag
+        Stream<File> fileStream = parallelProcessing ? Arrays.stream(files).parallel() : Arrays.stream(files);
+        fileStream.forEach(file -> {
             try {
                 ComplexData complexData = objectMapper.readValue(file, ComplexData.class);
                 
@@ -434,14 +583,25 @@ public class JsonQueryUtility {
                             .collect(Collectors.toList());
                     
                     // Wrap each object with its filename
-                    for (DataObject obj : filtered) {
-                        matchingObjects.add(new ObjectWithFile(obj, file.getName()));
+                    synchronized (matchingObjects) {
+                        for (DataObject obj : filtered) {
+                            matchingObjects.add(new ObjectWithFile(obj, file.getName()));
+                        }
                     }
+                }
+                
+                int processed = filesProcessed.incrementAndGet();
+                if (verbose && processed % 10 == 0) {
+                    System.out.println("  Processed " + processed + "/" + files.length + " files, found " + matchingObjects.size() + " matching objects so far...");
                 }
             } catch (IOException e) {
                 String errorMsg = "Error reading file " + file.getName() + ": " + e.getMessage();
                 printError(errorMsg);
             }
+        });
+
+        if (verbose) {
+            System.out.println("Completed: Found " + matchingObjects.size() + " matching objects in " + files.length + " files");
         }
 
         return matchingObjects;

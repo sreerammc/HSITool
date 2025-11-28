@@ -115,16 +115,25 @@ Or without header:
 - **Summary mode**: CSV files with summary data (`.csv` extension)
 - If output file is not specified, files are auto-generated with timestamps
 
-## Memory Management
+## Performance Optimizations
 
-The utility has been optimized for large datasets (e.g., 40,000+ points):
+The utility has been optimized for large datasets (e.g., 40,000+ points) with multithreading and memory management:
 
+### Multithreading
+- **Parallel file processing**: JSON files are processed in parallel using all available CPU cores
+- **Parallel point processing**: Multiple point IDs are processed concurrently in summary mode
+- **Automatic thread pool**: Uses a thread pool sized to your CPU cores for optimal performance
+
+### Memory Management
 - **Summary mode**: Uses streaming to process data without loading all objects into memory. Only counts and optionally file names are stored.
 - **Summary mode with --no-files**: Even more memory-efficient as it skips collecting file names entirely.
 - **Individual mode**: Processes points incrementally, clearing memory after each point.
 - **Progress indicators**: Shows progress every 1,000 points processed.
-- **Automatic garbage collection**: Suggests GC after every 5,000 points to help manage memory.
+- **Automatic garbage collection**: Suggests GC after large batches to help manage memory.
 
-For very large datasets, **summary mode with --no-files is recommended** for maximum memory efficiency.
+### Performance Tips
+- For very large datasets, **summary mode with --no-files is recommended** for maximum speed and memory efficiency
+- Processing speed scales with the number of CPU cores (e.g., 8 cores = ~8x faster file processing)
+- SSD storage will significantly improve file I/O performance
 
 

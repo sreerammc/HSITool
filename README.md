@@ -86,16 +86,26 @@ The utility will:
 
 All output is written simultaneously to both the console and the output file, so you can see results in real-time while also having a saved record.
 
-## Memory Management
+## Performance Optimizations
 
-The utility is optimized for large datasets (40,000+ points):
+The utility includes several performance optimizations:
+
+### Multithreading
+- **Parallel file processing**: JSON files are processed in parallel using all available CPU cores
+- **Parallel point processing**: Multiple point IDs are processed concurrently in summary mode
+- **Thread-safe collections**: Uses ConcurrentHashMap for thread-safe data aggregation
+
+### Memory Management
 - **Summary mode**: Uses streaming to process data without loading all objects into memory
 - **Summary mode with --no-files**: Even more memory-efficient, skips file name collection
 - **Individual mode**: Processes points incrementally, clearing memory after each point
 - **Progress indicators**: Shows progress every 1,000 points
-- **Automatic GC**: Suggests garbage collection every 5,000 points
+- **Automatic GC**: Suggests garbage collection after large batches
 
-For very large datasets, **summary mode with --no-files is recommended** for maximum memory efficiency.
+### Performance Tips
+- For very large datasets (40,000+ points), **summary mode with --no-files is recommended** for maximum speed and memory efficiency
+- Processing speed scales with the number of CPU cores available
+- SSD storage will significantly improve file I/O performance
 
 ## JSON Structure
 
