@@ -23,9 +23,9 @@ public class JsonQueryUtility {
             .registerModule(new JavaTimeModule());
     private static PrintWriter fileWriter = null;
     
-    // Thread pool for parallel processing
-    private static final int THREAD_POOL_SIZE = Runtime.getRuntime().availableProcessors();
-    private static final ExecutorService executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
+    // Thread pool for parallel processing - configurable
+    private static int THREAD_POOL_SIZE = Runtime.getRuntime().availableProcessors();
+    private static ExecutorService executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
 
     // Wrapper class to track filename with each object
     private static class ObjectWithFile {
@@ -61,6 +61,7 @@ public class JsonQueryUtility {
         boolean includeFiles = true; // Default to including files
         boolean parallelProcessing = true; // Default to parallel processing
         boolean verbose = false; // Default to non-verbose
+        int maxThreads = Runtime.getRuntime().availableProcessors(); // Default to all cores
         
         // Check for flags in any position after mode
         for (int i = 6; i < args.length; i++) {
@@ -71,7 +72,40 @@ public class JsonQueryUtility {
                 parallelProcessing = false;
             } else if ("--verbose".equals(arg) || "-v".equals(arg)) {
                 verbose = true;
+            } else if (arg.startsWith("--threads=")) {
+                try {
+                    maxThreads = Integer.parseInt(arg.substring("--threads=".length()));
+                    if (maxThreads < 1) {
+                        maxThreads = 1;
+                    } else if (maxThreads > Runtime.getRuntime().availableProcessors() * 2) {
+                        maxThreads = Runtime.getRuntime().availableProcessors() * 2;
+                        System.out.println("Warning: Thread count capped at " + maxThreads);
+                    }
+                } catch (NumberFormatException e) {
+                    System.err.println("Warning: Invalid thread count, using default");
+                }
+            } else if (arg.startsWith("-t")) {
+                try {
+                    if (arg.length() > 2 && Character.isDigit(arg.charAt(2))) {
+                        maxThreads = Integer.parseInt(arg.substring(2));
+                    } else if (i + 1 < args.length) {
+                        maxThreads = Integer.parseInt(args[++i]);
+                    }
+                    if (maxThreads < 1) maxThreads = 1;
+                    if (maxThreads > Runtime.getRuntime().availableProcessors() * 2) {
+                        maxThreads = Runtime.getRuntime().availableProcessors() * 2;
+                    }
+                } catch (NumberFormatException | ArrayIndexOutOfBoundsException e) {
+                    System.err.println("Warning: Invalid thread count, using default");
+                }
             }
+        }
+        
+        // Update thread pool size if specified
+        if (maxThreads != Runtime.getRuntime().availableProcessors()) {
+            THREAD_POOL_SIZE = maxThreads;
+            executorService.shutdown();
+            executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
         }
 
         try {
@@ -116,6 +150,7 @@ public class JsonQueryUtility {
             fileWriter = new PrintWriter(new FileWriter(outputFile, false));
             System.out.println("Output will be written to: " + outputFile);
             System.out.println("Parallel processing: " + (parallelProcessing ? "ENABLED (" + THREAD_POOL_SIZE + " threads)" : "DISABLED (sequential)"));
+            System.out.println("CPU cores available: " + Runtime.getRuntime().availableProcessors());
             System.out.println("Verbose mode: " + (verbose ? "ENABLED" : "DISABLED"));
             System.out.println("");
 
@@ -215,6 +250,8 @@ public class JsonQueryUtility {
         System.out.println("  mode           - (Optional) Output mode: 'individual' (default) or 'summary'");
         System.out.println("  --no-files     - (Optional) Exclude file names from summary output. Use -nf as shorthand.");
         System.out.println("  --no-parallel  - (Optional) Disable parallel processing (use sequential). Use -np as shorthand.");
+        System.out.println("  --threads=N    - (Optional) Limit number of threads for parallel processing. Use -tN as shorthand.");
+        System.out.println("                  Example: --threads=2 or -t2 (limits to 2 threads, reduces CPU usage)");
         System.out.println("  --verbose      - (Optional) Enable verbose progress output. Use -v as shorthand.");
         System.out.println("");
         System.out.println("Examples:");
@@ -235,6 +272,10 @@ public class JsonQueryUtility {
         System.out.println("");
         System.out.println("  Enable verbose progress output:");
         System.out.println("    JsonQueryUtility \"C:\\data\" points.csv \"2025-11-19T14:00:00.000Z\" \"2025-11-19T15:30:00.000Z\" summary.csv summary --verbose");
+        System.out.println("");
+        System.out.println("  Limit CPU usage (use fewer threads):");
+        System.out.println("    JsonQueryUtility \"C:\\data\" points.csv \"2025-11-19T14:00:00.000Z\" \"2025-11-19T15:30:00.000Z\" summary.csv summary --threads=2");
+        System.out.println("    JsonQueryUtility \"C:\\data\" points.csv \"2025-11-19T14:00:00.000Z\" \"2025-11-19T15:30:00.000Z\" summary.csv summary -t2");
         System.out.println("");
         System.out.println("CSV Format:");
         System.out.println("  CSV file should contain point IDs, one per line. First line can be a header (will be skipped).");

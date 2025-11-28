@@ -136,4 +136,28 @@ The utility has been optimized for large datasets (e.g., 40,000+ points) with mu
 - Processing speed scales with the number of CPU cores (e.g., 8 cores = ~8x faster file processing)
 - SSD storage will significantly improve file I/O performance
 
+### CPU Usage Control
+
+For high-core-count CPUs (like Intel Xeon with 24+ cores), using all cores can cause very high CPU usage. Use the `--threads` option to limit CPU usage:
+
+**Recommended thread counts:**
+- **Low CPU usage**: `--threads=2` or `--no-parallel` (sequential)
+- **Moderate CPU usage**: `--threads=4` to `--threads=8` (recommended for most systems)
+- **High performance**: `--threads=12` to `--threads=16` (for powerful servers)
+- **Maximum speed**: Default (uses all cores - may cause 100% CPU usage)
+
+**Examples:**
+```bash
+# Low CPU usage (2 threads)
+java -jar target/blobutil-jar-with-dependencies.jar "C:\data" points.csv "2025-11-26T00:00:00Z" "2025-11-27T00:00:00Z" summary.csv summary --threads=2
+
+# Balanced (4-8 threads) - Recommended for Xeon processors
+java -jar target/blobutil-jar-with-dependencies.jar "C:\data" points.csv "2025-11-26T00:00:00Z" "2025-11-27T00:00:00Z" summary.csv summary --threads=4
+
+# Sequential (no parallel processing)
+java -jar target/blobutil-jar-with-dependencies.jar "C:\data" points.csv "2025-11-26T00:00:00Z" "2025-11-27T00:00:00Z" summary.csv summary --no-parallel
+```
+
+**Note**: For Intel Xeon Platinum processors (24+ cores), using 4-8 threads typically provides excellent performance without maxing out CPU usage.
+
 
