@@ -1,8 +1,8 @@
 package com.blobutil;
 
-import com.blobutil.model.ComplexData;
 import com.blobutil.model.DataObject;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.io.*;
@@ -510,6 +510,74 @@ public class JsonQueryUtility {
     }
 
     /**
+     * Reads JSON file and returns list of DataObject.
+     * Supports three formats:
+     * 1. ComplexData format: { "_name": "", "_model": "ComplexData", "_timestamp": ..., "ExportedData": { "Objects": [...] } }
+     * 2. ExportedData format: { "ExportedData": { "Objects": [...] } }
+     * 3. Direct array format: [ { "Id": ..., "Time": ..., ... }, ... ]
+     * 
+     * All formats are automatically detected and handled.
+     */
+    private static List<DataObject> readJsonFile(File file) throws IOException {
+        try {
+            JsonNode rootNode = objectMapper.readTree(file);
+            
+            // Format 3: Direct array - [ {...}, {...} ]
+            if (rootNode.isArray()) {
+                List<DataObject> objects = new ArrayList<>();
+                for (JsonNode node : rootNode) {
+                    try {
+                        DataObject obj = objectMapper.treeToValue(node, DataObject.class);
+                        if (obj != null) {
+                            objects.add(obj);
+                        }
+                    } catch (Exception e) {
+                        // Skip invalid objects in array
+                    }
+                }
+                return objects;
+            }
+            
+            // Format 1 & 2: Object with ExportedData
+            // This handles both:
+            // - Format 1: { "_name": "", "_model": "ComplexData", "ExportedData": {...} }
+            // - Format 2: { "ExportedData": {...} }
+            if (rootNode.isObject()) {
+                JsonNode exportedDataNode = rootNode.get("ExportedData");
+                if (exportedDataNode != null && exportedDataNode.isObject()) {
+                    JsonNode objectsNode = exportedDataNode.get("Objects");
+                    if (objectsNode != null && objectsNode.isArray()) {
+                        List<DataObject> objects = new ArrayList<>();
+                        for (JsonNode node : objectsNode) {
+                            try {
+                                DataObject obj = objectMapper.treeToValue(node, DataObject.class);
+                                if (obj != null) {
+                                    objects.add(obj);
+                                }
+                            } catch (Exception e) {
+                                // Skip invalid objects
+                            }
+                        }
+                        return objects;
+                    }
+                }
+            }
+            
+            // If we get here, the format is not recognized
+            throw new IOException("Cannot parse JSON file: " + file.getName() + 
+                ". Expected one of: (1) ComplexData format { \"_name\": \"\", \"ExportedData\": {...} }, " +
+                "(2) ExportedData format { \"ExportedData\": { \"Objects\": [...] } }, " +
+                "or (3) Array format [ {...}, {...} ]");
+                
+        } catch (IOException e) {
+            throw e; // Re-throw IO exceptions
+        } catch (Exception e) {
+            throw new IOException("Error parsing JSON file: " + file.getName() + 
+                ". Error: " + e.getMessage(), e);
+        }
+    }
+
+    /**
      * Memory-efficient query that only collects summary statistics without storing all objects.
      * Used for summary mode to handle large datasets (e.g., 40,000 points).
      */
@@ -539,13 +607,11 @@ public class JsonQueryUtility {
         Stream<File> fileStream = parallelProcessing ? Arrays.stream(files).parallel() : Arrays.stream(files);
         fileStream.forEach(file -> {
             try {
-                ComplexData complexData = objectMapper.readValue(file, ComplexData.class);
+                List<DataObject> objects = readJsonFile(file);
                 
-                if (complexData.getExportedData() != null && 
-                    complexData.getExportedData().getObjects() != null) {
-                    
+                if (objects != null && !objects.isEmpty()) {
                     // Stream and filter without collecting all objects
-                    complexData.getExportedData().getObjects().stream()
+                    objects.stream()
                             .filter(obj -> obj.getId() != null && obj.getId().equals(targetId))
                             .filter(obj -> obj.getTime() != null && 
                                          !obj.getTime().isBefore(timeFrom) && 
@@ -611,12 +677,10 @@ public class JsonQueryUtility {
         Stream<File> fileStream = parallelProcessing ? Arrays.stream(files).parallel() : Arrays.stream(files);
         fileStream.forEach(file -> {
             try {
-                ComplexData complexData = objectMapper.readValue(file, ComplexData.class);
+                List<DataObject> objects = readJsonFile(file);
                 
-                if (complexData.getExportedData() != null && 
-                    complexData.getExportedData().getObjects() != null) {
-                    
-                    List<DataObject> filtered = complexData.getExportedData().getObjects().stream()
+                if (objects != null && !objects.isEmpty()) {
+                    List<DataObject> filtered = objects.stream()
                             .filter(obj -> obj.getId() != null && obj.getId().equals(targetId))
                             .filter(obj -> obj.getTime() != null && 
                                          !obj.getTime().isBefore(timeFrom) && 
