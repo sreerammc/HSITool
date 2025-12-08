@@ -85,3 +85,4 @@ CPU cores available: 24
 
 You can monitor CPU usage in Task Manager (Windows) or `top` (Linux) to find your optimal thread count.
 
+
