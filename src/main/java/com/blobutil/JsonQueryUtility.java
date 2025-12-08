@@ -511,15 +511,47 @@ public class JsonQueryUtility {
 
     /**
      * Reads JSON file and returns list of DataObject.
-     * Supports three formats:
+     * Supports four formats:
      * 1. ComplexData format: { "_name": "", "_model": "ComplexData", "_timestamp": ..., "ExportedData": { "Objects": [...] } }
      * 2. ExportedData format: { "ExportedData": { "Objects": [...] } }
      * 3. Direct array format: [ { "Id": ..., "Time": ..., ... }, ... ]
+     * 4. Comma-separated objects: { "Id": ... }, { "Id": ... }, { "Id": ... } (without array brackets)
      * 
      * All formats are automatically detected and handled.
      */
     private static List<DataObject> readJsonFile(File file) throws IOException {
         try {
+            // First, try to read the file content as string to check for comma-separated objects
+            String fileContent = new String(Files.readAllBytes(file.toPath()), "UTF-8").trim();
+            
+            // Format 4: Check if it's comma-separated objects without array brackets
+            // Pattern: starts with { and contains }{ or },{ (end of object followed by start of next)
+            if (fileContent.startsWith("{") && !fileContent.startsWith("[") && 
+                (fileContent.contains("}{") || fileContent.contains("},{"))) {
+                // Wrap in array brackets and parse
+                String wrappedContent = "[" + fileContent + "]";
+                try {
+                    JsonNode rootNode = objectMapper.readTree(wrappedContent);
+                    if (rootNode.isArray()) {
+                        List<DataObject> objects = new ArrayList<>();
+                        for (JsonNode node : rootNode) {
+                            try {
+                                DataObject obj = objectMapper.treeToValue(node, DataObject.class);
+                                if (obj != null) {
+                                    objects.add(obj);
+                                }
+                            } catch (Exception e) {
+                                // Skip invalid objects in array
+                            }
+                        }
+                        return objects;
+                    }
+                } catch (Exception e) {
+                    // If wrapping fails, continue to try other formats
+                }
+            }
+            
+            // Try standard JSON parsing
             JsonNode rootNode = objectMapper.readTree(file);
             
             // Format 3: Direct array - [ {...}, {...} ]
@@ -567,7 +599,8 @@ public class JsonQueryUtility {
             throw new IOException("Cannot parse JSON file: " + file.getName() + 
                 ". Expected one of: (1) ComplexData format { \"_name\": \"\", \"ExportedData\": {...} }, " +
                 "(2) ExportedData format { \"ExportedData\": { \"Objects\": [...] } }, " +
-                "or (3) Array format [ {...}, {...} ]");
+                "(3) Array format [ {...}, {...} ], or " +
+                "(4) Comma-separated objects { ... }, { ... }");
                 
         } catch (IOException e) {
             throw e; // Re-throw IO exceptions
