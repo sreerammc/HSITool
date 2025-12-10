@@ -178,6 +178,7 @@ public class JsonQueryUtility {
 
                     if (verbose) {
                         System.out.println("Processing point ID: " + pointId + " (" + (processedCount + 1) + "/" + pointIds.size() + ")");
+                        System.out.println("  Time range: " + timeFrom + " to " + timeTo);
                     }
                     
                     List<ObjectWithFile> matchingObjects = queryJsonFiles(dataDirectory, pointId, timeFrom, timeTo, parallelProcessing, verbose);
@@ -526,8 +527,12 @@ public class JsonQueryUtility {
             
             // Format 4: Check if it's comma-separated objects without array brackets
             // Pattern: starts with { and contains }{ or },{ (end of object followed by start of next)
-            if (fileContent.startsWith("{") && !fileContent.startsWith("[") && 
-                (fileContent.contains("}{") || fileContent.contains("},{"))) {
+            // BUT NOT if it's a valid JSON object (which would have ExportedData or Objects structure)
+            boolean isFormat4 = fileContent.startsWith("{") && !fileContent.startsWith("[") && 
+                (fileContent.contains("}{") || fileContent.contains("},{"));
+            
+            // Skip Format 4 if it looks like a valid JSON object (has ExportedData or Objects structure)
+            if (isFormat4 && !fileContent.contains("\"ExportedData\"") && !fileContent.contains("\"Objects\"")) {
                 // Wrap in array brackets and parse
                 String wrappedContent = "[" + fileContent + "]";
                 try {
@@ -645,10 +650,21 @@ public class JsonQueryUtility {
                 if (objects != null && !objects.isEmpty()) {
                     // Stream and filter without collecting all objects
                     objects.stream()
-                            .filter(obj -> obj.getId() != null && obj.getId().equals(targetId))
-                            .filter(obj -> obj.getTime() != null && 
-                                         !obj.getTime().isBefore(timeFrom) && 
-                                         !obj.getTime().isAfter(timeTo))
+                            .filter(obj -> {
+                                // First filter: ID must match exactly
+                                if (obj.getId() == null || !obj.getId().equals(targetId)) {
+                                    return false;
+                                }
+                                // Second filter: Time must be within range (inclusive on both ends)
+                                if (obj.getTime() == null) {
+                                    return false;
+                                }
+                                // time >= timeFrom AND time <= timeTo (inclusive on both ends)
+                                // !isBefore means >= (greater than or equal)
+                                // !isAfter means <= (less than or equal)
+                                return !obj.getTime().isBefore(timeFrom) && 
+                                       !obj.getTime().isAfter(timeTo);
+                            })
                             .forEach(obj -> {
                                 totalCount.incrementAndGet();
                                 uniqueObjects.add(obj); // Set automatically handles uniqueness
@@ -710,14 +726,54 @@ public class JsonQueryUtility {
         Stream<File> fileStream = parallelProcessing ? Arrays.stream(files).parallel() : Arrays.stream(files);
         fileStream.forEach(file -> {
             try {
+                if (verbose) {
+                    System.out.println("  Attempting to read file: " + file.getName());
+                    System.out.flush();
+                }
                 List<DataObject> objects = readJsonFile(file);
                 
+                if (verbose) {
+                    System.out.println("  File read complete: " + file.getName() + ", objects=" + (objects != null ? objects.size() : "null"));
+                    System.out.flush();
+                }
+                
                 if (objects != null && !objects.isEmpty()) {
+                    if (verbose) {
+                        System.out.println("  Reading file: " + file.getName() + " (" + objects.size() + " objects)");
+                        // Show first few objects for debugging
+                        int debugCount = Math.min(3, objects.size());
+                        for (int i = 0; i < debugCount; i++) {
+                            DataObject obj = objects.get(i);
+                            System.out.println("    Sample object " + (i+1) + ": ID=" + obj.getId() + ", Time=" + obj.getTime());
+                        }
+                        System.out.flush();
+                    }
                     List<DataObject> filtered = objects.stream()
-                            .filter(obj -> obj.getId() != null && obj.getId().equals(targetId))
-                            .filter(obj -> obj.getTime() != null && 
-                                         !obj.getTime().isBefore(timeFrom) && 
-                                         !obj.getTime().isAfter(timeTo))
+                            .filter(obj -> {
+                                // First filter: ID must match exactly
+                                if (obj.getId() == null || !obj.getId().equals(targetId)) {
+                                    return false;
+                                }
+                                // Second filter: Time must be within range (inclusive on both ends)
+                                if (obj.getTime() == null) {
+                                    if (verbose) {
+                                        System.out.println("    Skipping object with null time: ID=" + obj.getId());
+                                    }
+                                    return false;
+                                }
+                                // time >= timeFrom AND time <= timeTo (inclusive on both ends)
+                                // !isBefore means >= (greater than or equal)
+                                // !isAfter means <= (less than or equal)
+                                boolean inRange = !obj.getTime().isBefore(timeFrom) && 
+                                                 !obj.getTime().isAfter(timeTo);
+                                if (verbose && obj.getId().equals(targetId)) {
+                                    System.out.println("    Checking: ID=" + obj.getId() + 
+                                        ", Time=" + obj.getTime() + 
+                                        ", InRange=" + inRange + 
+                                        " (From=" + timeFrom + ", To=" + timeTo + ")");
+                                }
+                                return inRange;
+                            })
                             .collect(Collectors.toList());
                     
                     // Wrap each object with its filename

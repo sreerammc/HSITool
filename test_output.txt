@@ -1,0 +1,29 @@
+========================================
+Processing Point ID: 11249231
+========================================
+
+========================================
+SUMMARY
+========================================
+ID: 11249231
+Time From: 2025-10-25T00:00:00Z
+Time To: 2025-11-25T23:59:59Z
+Total objects found: 3
+Unique objects: 3
+Duplicate objects: 0 (in 0 duplicate group(s))
+========================================
+
+========================================
+ALL MATCHING OBJECTS
+========================================
+Total objects found: 3
+
+1. Id=11249231, Fullname='Water.M.MILES CROSS WR (ALFORD).Treated Water Storage.Reservoir Outlet Flow Meter.Flow_VAL', Time=2025-11-25T23:15:00Z, Value=-1.9999999949504854E-6, Reason=3, Quality='Good' [File: sampletest.json]
+2. Id=11249231, Fullname='Water.M.MILES CROSS WR (ALFORD).Treated Water Storage.Reservoir Outlet Flow Meter.Flow_VAL', Time=2025-11-25T23:30:00Z, Value=0.012498000250005048, Reason=3, Quality='Good' [File: sampletest.json]
+3. Id=11249231, Fullname='Water.M.MILES CROSS WR (ALFORD).Treated Water Storage.Reservoir Outlet Flow Meter.Flow_VAL', Time=2025-11-25T23:45:00Z, Value=-1.9999999949504854E-6, Reason=3, Quality='Good' [File: sampletest.json]
+
+No duplicate records found.
+
+
+
+Results saved to: test_output.txt
